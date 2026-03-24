@@ -39,7 +39,7 @@ jobs:
             archive: tar.xz
 
     runs-on: ${{ matrix.os }}
-    if: inputs.target == '' || inputs.target == matrix.target
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == '' || inputs.target == matrix.target }}
 
     steps:
       - name: Determine ref
