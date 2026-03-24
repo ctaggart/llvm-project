@@ -192,7 +192,11 @@ jobs:
         if: steps.filter.outputs.skip != 'true'
         shell: bash
         run: |
-          sha256sum ${{ steps.names.outputs.archive }} > ${{ steps.names.outputs.archive }}.sha256
+          if command -v sha256sum &>/dev/null; then
+            sha256sum ${{ steps.names.outputs.archive }} > ${{ steps.names.outputs.archive }}.sha256
+          else
+            shasum -a 256 ${{ steps.names.outputs.archive }} > ${{ steps.names.outputs.archive }}.sha256
+          fi
 
       - name: Upload artifact
         if: steps.filter.outputs.skip != 'true'
