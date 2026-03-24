@@ -1,0 +1,237 @@
+name: Build LLVM for Zig
+
+on:
+  push:
+    tags:
+      - "llvmorg-*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "LLVM tag to build (e.g. llvmorg-21.1.8)"
+        required: true
+
+permissions: {}
+
+env:
+  LLVM_PROJECTS: "lld;clang"
+  CMAKE_BUILD_TYPE: Release
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-linux
+            archive: tar.xz
+          - os: windows-2025
+            target: x86_64-windows-msvc
+            archive: zip
+          - os: macos-15
+            target: aarch64-macos
+            archive: tar.xz
+          - os: macos-13
+            target: x86_64-macos
+            archive: tar.xz
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Determine ref
+        id: ref
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout LLVM
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.tag }}
+
+      - name: Set archive name
+        id: names
+        shell: bash
+        run: |
+          TAG="${{ steps.ref.outputs.tag }}"
+          VERSION="${TAG#llvmorg-}"
+          NAME="llvm-zig-${VERSION}-${{ matrix.target }}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "archive=${NAME}.${{ matrix.archive }}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y ninja-build
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Ninja (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ninja -y
+
+      - name: Configure LLVM (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cmake -S llvm -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} \
+            -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install" \
+            -DLLVM_ENABLE_PROJECTS="${{ env.LLVM_PROJECTS }}" \
+            -DLLVM_ENABLE_ZLIB=OFF \
+            -DLLVM_ENABLE_ZSTD=OFF \
+            -DLLVM_ENABLE_LIBXML2=OFF \
+            -DLLVM_ENABLE_TERMINFO=OFF \
+            -DLLVM_ENABLE_BINDINGS=OFF \
+            -DLLVM_ENABLE_ASSERTIONS=OFF \
+            -DLLVM_ENABLE_OCAMLDOC=OFF \
+            -DLLVM_ENABLE_Z3_SOLVER=OFF \
+            -DLLVM_INCLUDE_TESTS=OFF \
+            -DLLVM_INCLUDE_BENCHMARKS=OFF \
+            -DLLVM_INCLUDE_EXAMPLES=OFF \
+            -DLLVM_INCLUDE_DOCS=OFF \
+            -DCLANG_INCLUDE_TESTS=OFF \
+            -DCLANG_INCLUDE_DOCS=OFF
+
+      - name: Configure LLVM (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cmake -S llvm -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} `
+            -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/install" `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DLLVM_ENABLE_PROJECTS="${{ env.LLVM_PROJECTS }}" `
+            -DLLVM_ENABLE_ZLIB=OFF `
+            -DLLVM_ENABLE_ZSTD=OFF `
+            -DLLVM_ENABLE_LIBXML2=OFF `
+            -DLLVM_ENABLE_TERMINFO=OFF `
+            -DLLVM_ENABLE_BINDINGS=OFF `
+            -DLLVM_ENABLE_ASSERTIONS=OFF `
+            -DLLVM_ENABLE_OCAMLDOC=OFF `
+            -DLLVM_ENABLE_Z3_SOLVER=OFF `
+            -DLLVM_USE_CRT_RELEASE=MT `
+            -DLLVM_INCLUDE_TESTS=OFF `
+            -DLLVM_INCLUDE_BENCHMARKS=OFF `
+            -DLLVM_INCLUDE_EXAMPLES=OFF `
+            -DLLVM_INCLUDE_DOCS=OFF `
+            -DCLANG_INCLUDE_TESTS=OFF `
+            -DCLANG_INCLUDE_DOCS=OFF
+
+      - name: Build
+        run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }}
+
+      - name: Install
+        run: cmake --install build --config ${{ env.CMAKE_BUILD_TYPE }}
+
+      - name: Prune install (remove unnecessary files)
+        shell: bash
+        run: |
+          # Remove executables that are not needed for Zig compilation
+          # Keep: llvm-config (needed by build systems), clang/clang-cl, lld/lld-link
+          cd install
+
+          # Remove shared libraries (Zig links statically)
+          find lib -name '*.so*' -delete 2>/dev/null || true
+          find lib -name '*.dylib' -delete 2>/dev/null || true
+          rm -f bin/*.dll 2>/dev/null || true
+
+          # Remove tools not needed to compile Zig
+          cd bin
+          # List of binaries to keep
+          keep="clang|clang-[0-9]|clang-cl|clang-cpp|lld|lld-link|ld.lld|ld64.lld|wasm-ld|llvm-ar|llvm-config|llvm-ranlib|llvm-lib"
+          for f in *; do
+            if ! echo "$f" | grep -qE "^(${keep})(\\.exe)?$"; then
+              rm -f "$f"
+            fi
+          done
+          cd ../..
+
+          # Remove libexec, share (not needed for Zig)
+          rm -rf install/libexec install/share
+
+      - name: Create archive (tar.xz)
+        if: matrix.archive == 'tar.xz'
+        run: |
+          mv install ${{ steps.names.outputs.name }}
+          tar -cJf ${{ steps.names.outputs.archive }} ${{ steps.names.outputs.name }}
+
+      - name: Create archive (zip)
+        if: matrix.archive == 'zip'
+        shell: bash
+        run: |
+          mv install ${{ steps.names.outputs.name }}
+          7z a ${{ steps.names.outputs.archive }} ${{ steps.names.outputs.name }}
+
+      - name: Generate SHA256
+        shell: bash
+        run: |
+          sha256sum ${{ steps.names.outputs.archive }} > ${{ steps.names.outputs.archive }}.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.name }}
+          path: |
+            ${{ steps.names.outputs.archive }}
+            ${{ steps.names.outputs.archive }}.sha256
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -lh dist/
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VERSION="${TAG#llvmorg-}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+
+          NOTES="LLVM ${VERSION} prebuilt for Zig compilation.
+
+          Built with:
+          - Projects: clang, lld
+          - Static CRT (Windows: /MT)
+          - No zlib, zstd, libxml2, terminfo dependencies
+
+          Use with: \`zig build -Dstatic-llvm --search-prefix <extracted-dir>\`
+          Or CMake: \`cmake -DCMAKE_PREFIX_PATH=<extracted-dir> ..\`"
+
+          gh release create "${TAG}" \
+            --repo "${{ github.repository }}" \
+            --title "LLVM ${VERSION} for Zig" \
+            --notes "${NOTES}" \
+            dist/*
