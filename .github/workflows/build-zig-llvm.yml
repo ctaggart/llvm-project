@@ -39,10 +39,20 @@ jobs:
             archive: tar.xz
 
     runs-on: ${{ matrix.os }}
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == '' || inputs.target == matrix.target }}
 
     steps:
+      - name: Check target filter
+        id: filter
+        shell: bash
+        run: |
+          TARGET="${{ inputs.target }}"
+          if [ -n "$TARGET" ] && [ "$TARGET" != "${{ matrix.target }}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping ${{ matrix.target }} (filter: $TARGET)"
+          fi
+
       - name: Determine ref
+        if: steps.filter.outputs.skip != 'true'
         id: ref
         shell: bash
         run: |
@@ -53,12 +63,14 @@ jobs:
           fi
 
       - name: Checkout LLVM
+        if: steps.filter.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
           repository: llvm/llvm-project
           ref: ${{ steps.ref.outputs.tag }}
 
       - name: Set archive name
+        if: steps.filter.outputs.skip != 'true'
         id: names
         shell: bash
         run: |
@@ -70,23 +82,23 @@ jobs:
           echo "archive=${NAME}.${{ matrix.archive }}" >> "$GITHUB_OUTPUT"
 
       - name: Install Ninja (Linux)
-        if: runner.os == 'Linux'
+        if: steps.filter.outputs.skip != 'true' && runner.os == 'Linux'
         run: sudo apt-get install -y ninja-build
 
       - name: Install Ninja (macOS)
-        if: runner.os == 'macOS'
+        if: steps.filter.outputs.skip != 'true' && runner.os == 'macOS'
         run: brew install ninja
 
       - name: Setup MSVC (Windows)
-        if: runner.os == 'Windows'
+        if: steps.filter.outputs.skip != 'true' && runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install Ninja (Windows)
-        if: runner.os == 'Windows'
+        if: steps.filter.outputs.skip != 'true' && runner.os == 'Windows'
         run: choco install ninja -y
 
       - name: Configure LLVM (Unix)
-        if: runner.os != 'Windows'
+        if: steps.filter.outputs.skip != 'true' && runner.os != 'Windows'
         run: |
           cmake -S llvm -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} \
@@ -108,7 +120,7 @@ jobs:
             -DCLANG_INCLUDE_DOCS=OFF
 
       - name: Configure LLVM (Windows)
-        if: runner.os == 'Windows'
+        if: steps.filter.outputs.skip != 'true' && runner.os == 'Windows'
         run: |
           cmake -S llvm -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=${{ env.CMAKE_BUILD_TYPE }} `
@@ -132,16 +144,17 @@ jobs:
             -DCLANG_INCLUDE_DOCS=OFF
 
       - name: Build
+        if: steps.filter.outputs.skip != 'true'
         run: cmake --build build --config ${{ env.CMAKE_BUILD_TYPE }}
 
       - name: Install
+        if: steps.filter.outputs.skip != 'true'
         run: cmake --install build --config ${{ env.CMAKE_BUILD_TYPE }}
 
       - name: Prune install (remove unnecessary files)
+        if: steps.filter.outputs.skip != 'true'
         shell: bash
         run: |
-          # Remove executables that are not needed for Zig compilation
-          # Keep: llvm-config (needed by build systems), clang/clang-cl, lld/lld-link
           cd install
 
           # Remove shared libraries (Zig links statically)
@@ -151,7 +164,6 @@ jobs:
 
           # Remove tools not needed to compile Zig
           cd bin
-          # List of binaries to keep
           keep="clang|clang-[0-9]|clang-cl|clang-cpp|lld|lld-link|ld.lld|ld64.lld|wasm-ld|llvm-ar|llvm-config|llvm-ranlib|llvm-lib"
           for f in *; do
             if ! echo "$f" | grep -qE "^(${keep})(\\.exe)?$"; then
@@ -164,24 +176,26 @@ jobs:
           rm -rf install/libexec install/share
 
       - name: Create archive (tar.xz)
-        if: matrix.archive == 'tar.xz'
+        if: steps.filter.outputs.skip != 'true' && matrix.archive == 'tar.xz'
         run: |
           mv install ${{ steps.names.outputs.name }}
           tar -cJf ${{ steps.names.outputs.archive }} ${{ steps.names.outputs.name }}
 
       - name: Create archive (zip)
-        if: matrix.archive == 'zip'
+        if: steps.filter.outputs.skip != 'true' && matrix.archive == 'zip'
         shell: bash
         run: |
           mv install ${{ steps.names.outputs.name }}
           7z a ${{ steps.names.outputs.archive }} ${{ steps.names.outputs.name }}
 
       - name: Generate SHA256
+        if: steps.filter.outputs.skip != 'true'
         shell: bash
         run: |
           sha256sum ${{ steps.names.outputs.archive }} > ${{ steps.names.outputs.archive }}.sha256
 
       - name: Upload artifact
+        if: steps.filter.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.names.outputs.name }}
@@ -192,7 +206,7 @@ jobs:
 
   release:
     needs: build
-    if: ${{ !cancelled() && contains(needs.build.result, 'success') }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
