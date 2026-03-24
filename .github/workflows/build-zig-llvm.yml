@@ -237,7 +237,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -254,8 +254,17 @@ jobs:
           Use with: \`zig build -Dstatic-llvm --search-prefix <extracted-dir>\`
           Or CMake: \`cmake -DCMAKE_PREFIX_PATH=<extracted-dir> ..\`"
 
-          gh release create "${TAG}" \
-            --repo "${{ github.repository }}" \
-            --title "LLVM ${VERSION} for Zig" \
-            --notes "${NOTES}" \
-            dist/*
+          # Create release if it doesn't exist, or upload to existing
+          if gh release view "${TAG}" --repo "${{ github.repository }}" &>/dev/null; then
+            echo "Release ${TAG} exists — uploading assets"
+            gh release upload "${TAG}" \
+              --repo "${{ github.repository }}" \
+              --clobber \
+              dist/*
+          else
+            gh release create "${TAG}" \
+              --repo "${{ github.repository }}" \
+              --title "LLVM ${VERSION} for Zig" \
+              --notes "${NOTES}" \
+              dist/*
+          fi
