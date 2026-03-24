@@ -51,6 +51,7 @@ jobs:
       - name: Checkout LLVM
         uses: actions/checkout@v4
         with:
+          repository: llvm/llvm-project
           ref: ${{ steps.ref.outputs.tag }}
 
       - name: Set archive name
