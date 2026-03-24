@@ -9,6 +9,9 @@ on:
       tag:
         description: "LLVM tag to build (e.g. llvmorg-21.1.8)"
         required: true
+      target:
+        description: "Build only this target (leave empty for all)"
+        required: false
 
 permissions: {}
 
@@ -31,11 +34,12 @@ jobs:
           - os: macos-15
             target: aarch64-macos
             archive: tar.xz
-          - os: macos-13
+          - os: macos-14
             target: x86_64-macos
             archive: tar.xz
 
     runs-on: ${{ matrix.os }}
+    if: inputs.target == '' || inputs.target == matrix.target
 
     steps:
       - name: Determine ref
@@ -188,6 +192,7 @@ jobs:
 
   release:
     needs: build
+    if: ${{ !cancelled() && contains(needs.build.result, 'success') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
