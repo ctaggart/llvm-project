@@ -175,6 +175,24 @@ jobs:
           # Remove libexec, share (not needed for Zig)
           rm -rf install/libexec install/share
 
+      - name: Create stub z and zstd libs
+        if: steps.filter.outputs.skip != 'true'
+        shell: bash
+        run: |
+          # Zig's build.zig unconditionally links z and zstd, but LLVM is built
+          # without them. Create empty stub libraries so the linker is satisfied.
+          cd install/lib
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            echo "" > empty.c
+            cl //nologo //c empty.c
+            lib //nologo //OUT:z.lib empty.obj
+            lib //nologo //OUT:zstd.lib empty.obj
+            rm -f empty.c empty.obj
+          else
+            ar rcs libz.a
+            ar rcs libzstd.a
+          fi
+
       - name: Create archive (tar.xz)
         if: steps.filter.outputs.skip != 'true' && matrix.archive == 'tar.xz'
         run: |
